@@ -11,41 +11,26 @@ namespace DIScopeExample
 	{
 		static Task Main(string[] args)
 		{
-			using IHost host = CreateHostBuilder(args).Build();
-
-			// The top level services
-			var appServices = host.Services;
-			var app = appServices.GetRequiredService<IApplication>();
-			
-			// Create a scope for the Window
-			var windowServices = appServices.CreateScope().ServiceProvider;
+			var app = new App();
 
 			// Get a Window
-			var window0 = windowServices.GetRequiredService<IWindow>();
+			var window0 = app.Services.GetRequiredService<IWindow>(); // Could also just be IApp.CreateWindow for clarity
 			
 			// When AlertServices needs a window, it'll be the same Window
-			var alertService = windowServices.GetRequiredService<IAlertService>();
+			var alertService = window0.GetRequiredService<IAlertService>();
 
 			alertService.Alert("This alert should be in Window 0");
 
-			// Create a second service provider to give to a new Window
-			var secondWindowServices = appServices.CreateScope().ServiceProvider;
-
-			var alertServices1 = secondWindowServices.GetRequiredService<IAlertService>();
-			var window1 = secondWindowServices.GetRequiredService<IWindow>();
+			// Create a Window and get an alert service from it
+			var window1 = app.Services.GetRequiredService<IWindow>();
+			var alertServices1 = window1.GetRequiredService<IAlertService>();
 
 			alertServices1.Alert("This alert should be in Window 1");
 
-			return host.RunAsync();
+			return app.RunAsync();
 		}
 
-		static IHostBuilder CreateHostBuilder(string[] args) =>
-			 Host.CreateDefaultBuilder(args)
-				.ConfigureServices((_, services) => services
-					.AddSingleton<IApplication, App>()
-					//.AddScoped<ISer>
-					.AddScoped<IWindow, Window>()
-					.AddScoped<IAlertService, AlertService>());
+		
 	}
 
 	public interface IApplication : IHost
@@ -53,16 +38,17 @@ namespace DIScopeExample
 		
 	}
 
-	public class App : IApplication, IHost
+	public class App : IApplication
 	{
-		IHost _host;
+		// This should let folks do whatever it is we already do to let them add things to the services collection
+		static IHostBuilder CreateHostBuilder(string[] args) =>
+			   Host.CreateDefaultBuilder(args)
+				   .ConfigureServices((_, services) => services
+					   .AddTransient<IWindow, Window>());
+
+		readonly IHost _host;
 
 		public IServiceProvider Services => _host.Services;
-
-		static IHostBuilder CreateHostBuilder(string[] args) =>
-		   Host.CreateDefaultBuilder(args)
-			   .ConfigureServices((_, services) =>
-				   services.AddTransient<IWindow, Window>());
 
 		public Task StartAsync(CancellationToken cancellationToken = default)
 		{
@@ -79,13 +65,20 @@ namespace DIScopeExample
 			_host.Dispose();
 		}
 
+		public object GetService(Type serviceType)
+		{
+			return _host.Services.GetService(serviceType);
+		}
+
 		public App() 
 		{
-			_host = CreateHostBuilder(null).Build();
+			_host = CreateHostBuilder(null).ConfigureServices((_, services) =>
+					   services.AddSingleton<IApplication>(sp => this))
+					   .Build();
 		}
 	}
 
-	public interface IWindow
+	public interface IWindow : IServiceProvider
 	{
 		void ShowDialog(string title);
 	}
@@ -97,21 +90,38 @@ namespace DIScopeExample
 
 	public class Window : IWindow
 	{
-		private IApplication _app;
-		static int s_id;
+		// This should let folks do whatever it is we already do to let them add things to the services collection
+		static IHostBuilder CreateHostBuilder(string[] args) =>
+			   Host.CreateDefaultBuilder(args)
+				   .ConfigureServices((_, services) => services
+				   .AddScoped<IAlertService, AlertService>());
 
+		readonly IHost _host;
+
+		static int s_id;
 		int _id;
+
+		public IApplication App { get; }
 
 		public Window(IApplication app)
 		{
-			_app = app;
+			App = app;
 			_id = s_id;
 			s_id += 1;
+
+			_host = CreateHostBuilder(null).ConfigureServices((_, services) =>
+					   services.AddSingleton<IWindow>(sp => this))
+					   .Build();
 		}
 
 		public void ShowDialog(string title)
 		{
 			Console.WriteLine($">>>>> Window {_id} showing dialog: {title}");
+		}
+
+		public object GetService(Type serviceType)
+		{
+			return _host.Services.GetService(serviceType) ?? App.Services.GetService(serviceType);
 		}
 	}
 
